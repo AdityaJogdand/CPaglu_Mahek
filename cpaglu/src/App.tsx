@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import  { useState } from 'react';
 import Header from './components/Header';
 import PatientList from './components/PatientList';
 import PatientDetail from './components/PatientDetail';
