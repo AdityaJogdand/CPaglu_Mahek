@@ -1,431 +1,414 @@
-import pandas as pd
-import numpy as np
-import joblib
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+import csv
 import time
 import os
-from datetime import datetime
 import logging
+import json
+from datetime import datetime
+from typing import List, Dict, Optional, Any
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import uvicorn
+from google import genai
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
+import threading
+import watchdog.events
+import watchdog.observers
 
-# Configure logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Path to the CSV file (would be replaced with your real data source)
-DATA_PATH = "patient_data.csv"
-
-# Global variables to store model, scaler, and current urgency classifications
-model = None
-scaler = None
-current_predictions = {}
-
-def preprocess_data(df):
-    """Preprocess the data for model training and prediction"""
-    # Calculate derived features if they don't exist
-    if 'Derived_Pulse_Pressure' not in df.columns:
-        df['Derived_Pulse_Pressure'] = df['Systolic Blood Pressure'] - df['Diastolic Blood Pressure']
-    
-    if 'Derived_MAP' not in df.columns:
-        df['Derived_MAP'] = df['Diastolic Blood Pressure'] + (1/3) * (df['Systolic Blood Pressure'] - df['Diastolic Blood Pressure'])
-    
-    if 'Derived_BMI' not in df.columns and 'Weight (kg)' in df.columns and 'Height (m)' in df.columns:
-        df['Derived_BMI'] = df['Weight (kg)'] / (df['Height (m)'] ** 2)
-    
-    # Convert categorical data
-    if 'Gender' in df.columns:
-        df['Gender'] = df['Gender'].map({'Male': 0, 'Female': 1})
-    
-    # Select features for the model
-    feature_cols = [
-        'Heart Rate', 'Respiratory Rate', 'Body Temperature', 
-        'Oxygen Saturation', 'Systolic Blood Pressure', 'Diastolic Blood Pressure',
-        'Age', 'Gender', 'Derived_Pulse_Pressure', 'Derived_MAP', 'Derived_BMI'
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("triage_log.txt"),
+        logging.StreamHandler()
     ]
-    
-    if 'Derived_HRV' in df.columns:
-        feature_cols.append('Derived_HRV')
-    
-    # Clean column names and select only needed features
-    clean_cols = []
-    for col in feature_cols:
-        if col in df.columns:
-            clean_cols.append(col)
-        elif col.lower().replace(' ', '_') in df.columns:
-            clean_cols.append(col.lower().replace(' ', '_'))
-        elif col.replace(' ', '_') in df.columns:
-            clean_cols.append(col.replace(' ', '_'))
-    
-    # Extract features and handle missing values
-    X = df[clean_cols].copy()
-    X.fillna(X.mean(), inplace=True)
-    
-    return X
+)
+logger = logging.getLogger()
 
-def derive_urgency_classes(df, X):
-    """Use machine learning to derive urgency classes without hardcoded rules"""
-    risk_col = 'Risk Category' if 'Risk Category' in df.columns else 'risk_category'
-    
-    # Define our target urgency categories
-    urgency_categories = ['Immediate', 'Urgent', 'Delay']
-    
-    if risk_col in df.columns and df[risk_col].nunique() > 0:
-        # If risk category is provided, map it to urgency levels
-        logger.info("Using existing risk categories to derive urgency levels")
-        
-        # If we have only two categories (e.g., High Risk and Low Risk)
-        if df[risk_col].nunique() == 2:
-            logger.info("Binary risk categories found, creating three urgency levels")
-            
-            # Scale the data
-            temp_scaler = StandardScaler()
-            X_scaled = temp_scaler.fit_transform(X)
-            
-            # Map risk categories to numerical values for training
-            risk_values = df[risk_col].map({'High Risk': 1, 'Low Risk': 0})
-            
-            # Train a temporary model to get probabilities
-            temp_model = RandomForestClassifier(n_estimators=50, random_state=42)
-            temp_model.fit(X_scaled, risk_values)
-            
-            # Get probabilities
-            probs = temp_model.predict_proba(X_scaled)[:, 1]
-            
-            # Create three categories based on probabilities
-            # Top third -> Immediate, Middle third -> Urgent, Bottom third -> Delay
-            thresholds = [np.percentile(probs, 33), np.percentile(probs, 66)]
-            
-            conditions = [
-                probs >= thresholds[1],  # Top third -> Immediate
-                (probs >= thresholds[0]) & (probs < thresholds[1])  # Middle third -> Urgent
-            ]
-            
-            y = np.select(conditions, urgency_categories[:-1], default=urgency_categories[-1])
-            
-        else:
-            # If we already have three or more categories, map them to our urgency levels
-            logger.info(f"Multiple risk categories found: {df[risk_col].unique()}")
-            
-            # Create a mapping from existing categories to urgency levels
-            unique_categories = df[risk_col].unique()
-            if len(unique_categories) == 3:
-                # If we already have exactly 3 categories, sort them by count (assuming rarest = most urgent)
-                category_counts = df[risk_col].value_counts().sort_values()
-                category_map = {}
-                for i, (category, _) in enumerate(category_counts.items()):
-                    category_map[category] = urgency_categories[i]
-            else:
-                # For other cases, use a simple mapping
-                category_map = {}
-                for category in unique_categories:
-                    if 'high' in str(category).lower():
-                        category_map[category] = 'Immediate'
-                    elif 'medium' in str(category).lower() or 'moderate' in str(category).lower():
-                        category_map[category] = 'Urgent'
-                    else:
-                        category_map[category] = 'Delay'
-            
-            # Apply the mapping
-            y = df[risk_col].map(category_map)
-            y = y.fillna('Delay')  # Default to Delay if category is unknown
-    else:
-        # If no risk category is provided, use unsupervised learning (clustering)
-        logger.info("No risk categories available, using clustering to derive urgency levels")
-        
-        # Scale the data
-        temp_scaler = StandardScaler()
-        X_scaled = temp_scaler.fit_transform(X)
-        
-        # Use KMeans to create exactly 3 clusters
-        kmeans = KMeans(n_clusters=3, random_state=42)
-        clusters = kmeans.fit_predict(X_scaled)
-        
-        # Determine cluster severity based on vital signs
-        cluster_severity = {}
-        for cluster_id in range(3):
-            cluster_data = X[clusters == cluster_id]
-            
-            # Calculate average vital signs for this cluster
-            severity_score = 0
-            
-            # Higher heart rate increases severity
-            if 'Heart Rate' in cluster_data:
-                hr = cluster_data['Heart Rate'].mean()
-                severity_score += (hr - 70) / 30  # Normalize around normal heart rate
-            elif 'heart_rate' in cluster_data:
-                hr = cluster_data['heart_rate'].mean()
-                severity_score += (hr - 70) / 30
-                
-            # Lower oxygen saturation increases severity
-            if 'Oxygen Saturation' in cluster_data:
-                ox = cluster_data['Oxygen Saturation'].mean()
-                severity_score += (100 - ox) * 0.5  # Lower oxygen = higher score
-            elif 'oxygen_saturation' in cluster_data:
-                ox = cluster_data['oxygen_saturation'].mean()
-                severity_score += (100 - ox) * 0.5
-                
-            # Blood pressure extremes increase severity
-            if 'Systolic Blood Pressure' in cluster_data:
-                sys = cluster_data['Systolic Blood Pressure'].mean()
-                severity_score += abs(sys - 120) / 20  # Deviation from normal
-            elif 'systolic_blood_pressure' in cluster_data:
-                sys = cluster_data['systolic_blood_pressure'].mean()
-                severity_score += abs(sys - 120) / 20
-                
-            cluster_severity[cluster_id] = severity_score
-        
-        # Rank clusters by severity score
-        ranked_clusters = sorted(cluster_severity.items(), key=lambda x: x[1], reverse=True)
-        
-        # Map clusters to urgency levels
-        cluster_map = {
-            ranked_clusters[0][0]: 'Immediate',  # Highest severity score
-            ranked_clusters[1][0]: 'Urgent',     # Middle severity score
-            ranked_clusters[2][0]: 'Delay'       # Lowest severity score
-        }
-        
-        # Apply the mapping to create urgency labels
-        y = pd.Series([cluster_map[c] for c in clusters])
-    
-    logger.info(f"Created urgency classes with distribution: {y.value_counts().to_dict()}")
-    return y
+# Set Gemini API Key directly
+GEMINI_API_KEY = "AIzaSyCjYu4ylz27kUUrLam69jo1R7gTQHX_e1A"
 
-def train_model(df):
-    """Train a machine learning model on the data"""
-    global model, scaler
-    
-    # Preprocess the data
-    X = preprocess_data(df)
-    
-    # Derive urgency classes using machine learning
-    y = derive_urgency_classes(df, X)
-    
-    # Scale the features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Train a Random Forest classifier
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_scaled, y)
-    
-    # Save the model and scaler
-    joblib.dump(model, 'patient_urgency_model.pkl')
-    joblib.dump(scaler, 'patient_scaler.pkl')
-    
-    logger.info("Model trained successfully")
-    return model, scaler
+if not GEMINI_API_KEY:
+    raise ValueError("Error: Gemini API key is missing. Please set it correctly.")
 
-def load_or_train_model():
-    """Load the model and scaler from disk or train a new one if not available"""
-    global model, scaler
+# Initialize Gemini API Client
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Initialize Firebase
+try:
+    cred = credentials.Certificate("firebase.json")
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://cpaglu-18a8f-default-rtdb.firebaseio.com/'
+    })
+    logger.info("Firebase initialized successfully")
+except Exception as e:
+    logger.error(f"Firebase initialization error: {str(e)}")
+    raise ValueError("Error: Firebase initialization failed. Please check your credentials.")
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Patient Triage API",
+    description="API for classifying patients using medical triage with Gemini AI and Firebase",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Pydantic models for request/response
+class PatientBase(BaseModel):
+    Name: str
+    Age: int = Field(..., ge=0, le=120)
+    Gender: str
+    Temperature: float = Field(..., ge=30, le=45)
+    BP_Systolic: int = Field(..., ge=50, le=250)
+    BP_Diastolic: int = Field(..., ge=30, le=150)
+    SpO2: int = Field(..., ge=50, le=100)
+    Heart_Rate: int = Field(..., ge=30, le=220)
     
+class PatientCreate(PatientBase):
+    ID: Optional[str] = None
+    Additional_Notes: Optional[str] = None
+
+class PatientResponse(PatientBase):
+    ID: str
+    Classification: str
+    Explanation: str
+    Last_Updated: str
+    Additional_Notes: Optional[str] = None
+
+class PatientList(BaseModel):
+    patients: List[PatientResponse]
+
+# Function to generate a refined triage classification prompt
+def generate_prompt(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender):
+    return f"""
+    You are an advanced AI specializing in medical triage classification.
+    Your task is to assess a patient's condition and classify it as **Immediate, Urgent, or Delayed** based on their vital signs.
+
+    ### **Patient Data:**
+    - **Temperature:** {temp} °C
+    - **Blood Pressure:** {bp_sys}/{bp_dia} mmHg
+    - **SpO2 (Oxygen Saturation):** {spo2} %
+    - **Heart Rate:** {heart_rate} BPM
+    - **Age:** {age} years
+    - **Gender:** {gender}
+
+    ### **Triage Classification Guidelines:**
+    1. **Immediate (Critical - Requires Emergency Care)**  
+       - Signs of severe distress, such as extremely low oxygen, abnormal blood pressure, or life-threatening heart rate.  
+       - Symptoms suggesting organ failure, shock, or imminent collapse.  
+
+    2. **Urgent (Serious - Needs Medical Attention Soon)**  
+       - Moderate distress, where the patient is stable but at risk of deterioration.  
+       - Vitals outside the normal range but not immediately life-threatening.  
+
+    3. **Delayed (Stable - Can Wait for Routine Care)**  
+       - Vitals within acceptable ranges, with no immediate signs of distress.  
+       - No evidence of rapid deterioration or acute medical risk.  
+
+    ### **Instructions for AI:**  
+    - Analyze the input vitals holistically instead of relying on fixed thresholds.  
+    - Use **clinical reasoning** rather than strict numerical cutoffs.  
+    - If vitals suggest multiple classifications, prioritize the **most critical one**.  
+    - Provide a clear but concise explanation with supporting medical reasoning.  
+
+    ### **Response Format:**  
+    ```
+    Classification: [Immediate/Urgent/Delayed]
+    Explanation: [Brief medical reasoning for classification]
+    ```
+    """
+
+# Function to call Gemini API and get classification
+def get_triage_classification(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender):
+    prompt = generate_prompt(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender)
+
     try:
-        if os.path.exists('patient_urgency_model.pkl') and os.path.exists('patient_scaler.pkl'):
-            model = joblib.load('patient_urgency_model.pkl')
-            scaler = joblib.load('patient_scaler.pkl')
-            logger.info("Model loaded from disk")
-        else:
-            # Load the data from CSV and train a new model
+        response = client.models.generate_content(
+            model="gemini-2.0-flash", 
+            contents=prompt
+        )
+
+        if response and hasattr(response, "text"):
+            return response.text.strip()
+        return "Error: No valid response received from AI."
+
+    except Exception as e:
+        logger.error(f"API error: {str(e)}")
+        return f"Error: {str(e)}"
+
+# Function to extract classification and explanation
+def parse_classification_result(result):
+    classification = "Unknown"
+    explanation = "Could not determine classification"
+    
+    if "Classification:" in result:
+        classification_parts = result.split("Classification:")
+        if len(classification_parts) > 1:
+            classification_line = classification_parts[1].split("\n")[0].strip()
+            classification = classification_line
+    
+    if "Explanation:" in result:
+        explanation_parts = result.split("Explanation:")
+        if len(explanation_parts) > 1:
+            explanation = explanation_parts[1].strip()
+    
+    return classification, explanation
+
+# Function to update Firebase with patient data
+def update_firebase_data(patient_data):
+    try:
+        # Get patient ID (or generate one if not present)
+        patient_id = patient_data.get("ID")
+        if not patient_id:
+            patient_id = f"patient_{patient_data.get('Name', '').replace(' ', '_').lower()}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            patient_data["ID"] = patient_id
+        
+        # Reference to patients node in database
+        patients_ref = db.reference('patients')
+        
+        # Update data for specific patient
+        patient_ref = patients_ref.child(patient_id)
+        patient_ref.set(patient_data)
+        
+        logger.info(f"Successfully updated data for patient ID: {patient_id}")
+        return patient_data
+    except Exception as e:
+        logger.error(f"Firebase update error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Firebase update failed: {str(e)}")
+
+# Function to get all patients from Firebase
+def get_all_patients_from_firebase():
+    try:
+        patients_ref = db.reference('patients')
+        patients_data = patients_ref.get()
+        
+        if not patients_data:
+            return []
+            
+        # Convert to list of patient objects
+        patients_list = [patient_data for patient_id, patient_data in patients_data.items()]
+        return patients_list
+        
+    except Exception as e:
+        logger.error(f"Firebase read error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Firebase read failed: {str(e)}")
+
+# Function to get patient by ID from Firebase
+def get_patient_by_id(patient_id):
+    try:
+        patient_ref = db.reference(f'patients/{patient_id}')
+        patient_data = patient_ref.get()
+        
+        if not patient_data:
+            raise HTTPException(status_code=404, detail=f"Patient with ID {patient_id} not found")
+            
+        return patient_data
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        logger.error(f"Firebase read error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Firebase read failed: {str(e)}")
+
+# Function to process a single patient
+def process_patient(patient: PatientCreate):
+    try:
+        patient_dict = patient.dict()
+        
+        # Process the patient
+        temp = patient.Temperature
+        bp_sys = patient.BP_Systolic
+        bp_dia = patient.BP_Diastolic
+        spo2 = patient.SpO2
+        heart_rate = patient.Heart_Rate
+        age = patient.Age
+        gender = patient.Gender
+
+        # Get classification from AI
+        classification_result = get_triage_classification(
+            temp, bp_sys, bp_dia, spo2, heart_rate, age, gender
+        )
+
+        # Parse classification and explanation
+        classification, explanation = parse_classification_result(classification_result)
+        
+        # Add classification data to patient record
+        patient_dict["Classification"] = classification
+        patient_dict["Explanation"] = explanation
+        patient_dict["Last_Updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Update Firebase
+        updated_patient = update_firebase_data(patient_dict)
+        return updated_patient
+        
+    except Exception as e:
+        logger.error(f"Error processing patient: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing patient: {str(e)}")
+
+# Function to process CSV file
+def process_csv(file_path):
+    try:
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return
+        
+        logger.info(f"Processing CSV file: {file_path}")
+        
+        with open(file_path, newline="", mode="r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            patients_data = list(reader)
+        
+        processed_count = 0
+        error_count = 0
+        
+        for row in patients_data:
             try:
-                df = pd.read_csv(DATA_PATH)
-                model, scaler = train_model(df)
-                logger.info("Model trained from CSV data")
+                # Convert values to appropriate types
+                processed_row = {
+                    "Name": row.get("Name", "Unknown"),
+                    "Age": int(row.get("Age", 40)),
+                    "Gender": row.get("Gender", "Unknown"),
+                    "Temperature": float(row.get("Temperature", 37.0)),
+                    "BP_Systolic": int(row.get("BP_Systolic", 120)),
+                    "BP_Diastolic": int(row.get("BP_Diastolic", 80)),
+                    "SpO2": int(row.get("SpO2", 98)),
+                    "Heart_Rate": int(row.get("Heart Rate", 75)),
+                    "ID": row.get("ID", None),
+                    "Additional_Notes": row.get("Additional_Notes", "")
+                }
+                
+                # Create patient object and process
+                patient = PatientCreate(**processed_row)
+                process_patient(patient)
+                processed_count += 1
+                
             except Exception as e:
-                logger.error(f"Error loading data and training model: {str(e)}")
-                # Create a dummy model for demo purposes
-                create_dummy_model()
+                logger.error(f"Error processing patient from CSV: {str(e)}")
+                error_count += 1
+                
+        logger.info(f"CSV processing complete - Processed: {processed_count}, Errors: {error_count}")
+    
     except Exception as e:
-        logger.error(f"Error loading model: {str(e)}")
-        create_dummy_model()
+        logger.error(f"Error processing CSV file: {str(e)}")
 
-def create_dummy_model():
-    """Create a dummy model for demonstration purposes"""
-    global model, scaler
-    
-    logger.warning("Creating dummy model as fallback")
-    
-    # Create a simple random forest model
-    X = np.random.rand(100, 10)
-    y = np.random.choice(['Immediate', 'Urgent', 'Delay'], 100)
-    
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    model = RandomForestClassifier(n_estimators=10, random_state=42)
-    model.fit(X_scaled, y)
+# File change event handler for watchdog
+class CSVFileHandler(watchdog.events.FileSystemEventHandler):
+    def __init__(self, csv_path):
+        self.csv_path = csv_path
+        self.last_modified = 0
+        self.cooldown = 2  # seconds between processing to prevent multiple rapid changes
 
-def generate_sample_data(num_patients=10):
-    """Generate sample patient data for demonstration purposes"""
-    patients = []
-    for i in range(1, num_patients + 1):
-        # Generate random but realistic vital signs
-        heart_rate = np.random.normal(75, 15)  # Mean 75, std 15
-        respiratory_rate = np.random.normal(16, 4)
-        body_temp = np.random.normal(37, 0.5)
-        oxygen = np.random.normal(97, 3)
-        systolic = np.random.normal(120, 20)
-        diastolic = np.random.normal(80, 10)
-        age = np.random.randint(18, 90)
-        gender = np.random.choice(['Male', 'Female'])
-        weight = np.random.normal(70, 15)
-        height = np.random.normal(1.7, 0.15)
-        
-        patients.append({
-            'Patient ID': i,
-            'Heart Rate': heart_rate,
-            'Respiratory Rate': respiratory_rate,
-            'Body Temperature': body_temp,
-            'Oxygen Saturation': oxygen,
-            'Systolic Blood Pressure': systolic,
-            'Diastolic Blood Pressure': diastolic,
-            'Age': age,
-            'Gender': gender,
-            'Weight (kg)': weight,
-            'Height (m)': height,
-            'Timestamp': datetime.now().isoformat()
-        })
-    
-    # Create a DataFrame and save to CSV
-    df = pd.DataFrame(patients)
-    df.to_csv(DATA_PATH, index=False)
-    logger.info(f"Generated sample data for {num_patients} patients")
-    return df
+    def on_modified(self, event):
+        if not event.is_directory and event.src_path.endswith(self.csv_path):
+            current_time = time.time()
+            if current_time - self.last_modified > self.cooldown:
+                self.last_modified = current_time
+                logger.info(f"Detected changes in {self.csv_path}")
+                # Sleep briefly to ensure file is fully written
+                time.sleep(0.5)
+                process_csv(self.csv_path)
 
-def predict_patient_urgency():
-    """Predict urgency levels for all patients"""
-    global current_predictions
-    
+# Function to start the file watcher
+def start_csv_watcher(csv_path="patients.csv"):
     try:
-        # Read the latest data
-        if not os.path.exists(DATA_PATH):
-            generate_sample_data()
-            
-        df = pd.read_csv(DATA_PATH)
+        logger.info(f"Starting file watcher for {csv_path}")
         
-        # Preprocess the data
-        X = preprocess_data(df)
-        X_scaled = scaler.transform(X)
+        # Process the file initially if it exists
+        if os.path.exists(csv_path):
+            process_csv(csv_path)
         
-        # Make predictions
-        predictions = model.predict(X_scaled)
-        probabilities = model.predict_proba(X_scaled)
+        # Set up the file watcher
+        event_handler = CSVFileHandler(csv_path)
+        observer = watchdog.observers.Observer()
+        observer.schedule(event_handler, path=os.path.dirname(csv_path) or '.', recursive=False)
+        observer.start()
         
-        # Update the current predictions
-        patient_id_col = 'Patient ID' if 'Patient ID' in df.columns else 'patient_id'
-        
-        for i, row in df.iterrows():
-            patient_id = int(row[patient_id_col])
-            confidence = max(probabilities[i])
-            urgency = predictions[i]
-            
-            current_predictions[patient_id] = {
-                'patient_id': patient_id,
-                'urgency_level': urgency,
-                'confidence': float(confidence),
-                'last_updated': datetime.now().isoformat()
-            }
-            
-            # Print the predictions
-            logger.info(f"Patient {patient_id}: {urgency} (Confidence: {confidence:.2f})")
-        
-        print("\n" + "="*50)
-        print(f"Updated predictions for {len(df)} patients at {datetime.now().strftime('%H:%M:%S')}")
-        print("="*50 + "\n")
-        
-        # Print a summary of urgency levels
-        urgency_counts = {}
-        for pred in current_predictions.values():
-            level = pred['urgency_level']
-            urgency_counts[level] = urgency_counts.get(level, 0) + 1
-        
-        print("Current Urgency Distribution:")
-        for level, count in urgency_counts.items():
-            print(f"  {level}: {count} patients")
-        print("\n")
-        
+        logger.info(f"File watcher started for {csv_path}")
+        return observer
     except Exception as e:
-        logger.error(f"Error in prediction: {str(e)}")
+        logger.error(f"Error starting file watcher: {str(e)}")
+        return None
 
-def simulate_data_changes():
-    """Simulate changes in patient data to demonstrate real-time monitoring"""
-    if not os.path.exists(DATA_PATH):
-        generate_sample_data()
-        return
-    
+# API Routes
+@app.get("/")
+def read_root():
+    return {"message": "Patient Triage API is running", "status": "active"}
+
+@app.post("/patients/", response_model=PatientResponse)
+def create_patient(patient: PatientCreate):
+    """Process a single patient and store in Firebase"""
     try:
-        # Read the current data
-        df = pd.read_csv(DATA_PATH)
-        
-        # Randomly select patients to update (between 30-70% of patients)
-        num_patients = len(df)
-        num_to_update = np.random.randint(max(1, int(0.3 * num_patients)), 
-                                        max(2, int(0.7 * num_patients)))
-        
-        patients_to_update = np.random.choice(df.index, num_to_update, replace=False)
-        
-        # Update vital signs with small changes
-        for idx in patients_to_update:
-            # Heart rate changes
-            df.loc[idx, 'Heart Rate'] = int(df.loc[idx, 'Heart Rate'] + np.random.normal(0, 3))
-            
-            # Oxygen saturation changes (smaller variation)
-            df.loc[idx, 'Oxygen Saturation'] += np.random.normal(0, 1)
-            df.loc[idx, 'Oxygen Saturation'] = min(100, max(70, df.loc[idx, 'Oxygen Saturation']))
-            
-            # Blood pressure changes
-            df.loc[idx, 'Systolic Blood Pressure'] = int(df.loc[idx, 'Systolic Blood Pressure'] + np.random.normal(0, 5))
-
-            df.loc[idx, 'Diastolic Blood Pressure'] = int(df.loc[idx, 'Diastolic Blood Pressure'] + np.random.normal(0, 3))
-
-            
-            # Temperature changes (very small)
-            df.loc[idx, 'Body Temperature'] += np.random.normal(0, 0.2)
-            
-            # Update timestamp
-            df.loc[idx, 'Timestamp'] = datetime.now().isoformat()
-        
-        # Save the updated data
-        df.to_csv(DATA_PATH, index=False)
-        logger.info(f"Updated data for {num_to_update} patients")
-        
+        result = process_patient(patient)
+        return result
     except Exception as e:
-        logger.error(f"Error simulating data changes: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-def main():
-    """Main function to run the patient monitoring system"""
-    print("="*60)
-    print("PATIENT MONITORING SYSTEM")
-    print("Real-time Patient Urgency Classification")
-    print("="*60)
-    
-    # Load or train the model
-    print("\nInitializing ML model...")
-    load_or_train_model()
-    
-    # Generate initial data if needed
-    if not os.path.exists(DATA_PATH):
-        print("\nGenerating initial sample patient data...")
-        generate_sample_data(num_patients=15)
-    
-    print("\nStarting continuous monitoring (every 3 seconds)...")
-    print("Press Ctrl+C to stop\n")
-    
+@app.get("/patients/", response_model=PatientList)
+def read_patients():
+    """Get all patients from Firebase"""
     try:
-        while True:
-            # Simulate changes in patient data
-            simulate_data_changes()
-            
-            # Predict urgency levels
-            predict_patient_urgency()
-            
-            # Wait for 3 seconds
-            time.sleep(3)
-    
-    except KeyboardInterrupt:
-        print("\nStopping continuous monitoring...")
-        print("Patient monitoring system stopped.")
+        patients = get_all_patients_from_firebase()
+        return {"patients": patients}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/patients/{patient_id}", response_model=PatientResponse)
+def read_patient(patient_id: str):
+    """Get a specific patient by ID"""
+    return get_patient_by_id(patient_id)
+
+@app.get("/stats/")
+def get_stats():
+    """Get triage statistics"""
+    try:
+        patients = get_all_patients_from_firebase()
+        
+        if not patients:
+            return {"total": 0, "classifications": {}}
+        
+        # Count classifications
+        classifications = {}
+        for patient in patients:
+            classification = patient.get("Classification", "Unknown")
+            classifications[classification] = classifications.get(classification, 0) + 1
+        
+        return {
+            "total": len(patients),
+            "classifications": classifications
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Run the server
 if __name__ == "__main__":
-    main()
+    logger.info("="*50)
+    logger.info("Starting Patient Triage API with Firebase integration...")
+    logger.info("Starting CSV file watcher for automatic updates...")
+    
+    # Start file watcher in a separate thread
+    csv_observer = start_csv_watcher("patients.csv")
+    
+    # Print server start message
+    logger.info("API available at http://localhost:8000")
+    logger.info("CSV file watcher is active - Edit patients.csv to auto-update Firebase")
+    logger.info("="*50)
+    
+    # Start FastAPI server
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    finally:
+        # Ensure the observer is stopped when the app stops
+        if csv_observer:
+            csv_observer.stop()
+            csv_observer.join()

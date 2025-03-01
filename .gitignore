@@ -1,1 +1,21 @@
+# Ignore the virtual environment
 env/
+__pycache__/
+
+# Ignore sensitive files
+firebase.json
+
+# Ignore CSV files containing patient data
+*.csv
+
+# Ignore log files
+*.log
+triage_log.txt
+
+# Ignore Python cache and compiled files
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore VS Code settings
+.vscode/
