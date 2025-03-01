@@ -7,11 +7,14 @@ from google import genai
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-# ========== CONFIGURE GEMINI CLIENT ========== 
+import threading
+
+# ========== CONFIGURE GEMINI CLIENT ==========
 client = genai.Client(api_key="AIzaSyDPNY5J14efn43fOxmEI9hbZOb2__e-s4I")  # Replace with your actual API key
 
-# ========== FIREBASE CONFIGURATION ========== 
+# ========== FIREBASE CONFIGURATION ==========
 cred = credentials.Certificate("firebase.json")  # Replace with your Firebase service account key
 firebase_admin.initialize_app(cred, {
     'databaseURL': 'https://cpaglu-18a8f-default-rtdb.firebaseio.com/'  # Replace with your Firebase DB URL
@@ -19,14 +22,23 @@ firebase_admin.initialize_app(cred, {
 
 firebase_ref = db.reference("patients")
 
-# ========== FILE PATH ========== 
+# ========== FILE PATH ==========
 CSV_FILE = "patients.csv"
 
 # Store the hash of each row to detect changes
 previous_hashes = {}
 
-# ========== FASTAPI SETUP ========== 
+# ========== FASTAPI SETUP ==========
 app = FastAPI()
+
+# Enable CORS (Allow all origins, methods, and headers)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (*), or specify a list: ["http://localhost:3000"]
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 @app.get("/patients")
 def get_patients():
@@ -39,12 +51,12 @@ def get_patient_by_name(name: str):
         return patient
     return {"error": "Patient not found"}
 
-# ========== FUNCTION TO HASH ROWS ========== 
+# ========== FUNCTION TO HASH ROWS ==========
 def hash_row(row):
     row_str = ",".join(map(str, row))
     return hashlib.md5(row_str.encode()).hexdigest()
 
-# ========== FUNCTION TO CHECK CHANGES ========== 
+# ========== FUNCTION TO CHECK CHANGES ==========
 def check_for_changes():
     global previous_hashes
     df = pd.read_csv(CSV_FILE)
@@ -58,7 +70,7 @@ def check_for_changes():
         previous_hashes[index] = row_hash
         process_changed_row(row)
 
-# ========== FUNCTION TO GENERATE PROMPT ========== 
+# ========== FUNCTION TO GENERATE PROMPT ==========
 def generate_prompt(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender):
     return f"""
     You are an AI specializing in medical triage classification.
@@ -76,7 +88,7 @@ def generate_prompt(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender):
     Explanation: [Brief medical reasoning]
     """
 
-# ========== FUNCTION TO CALL GEMINI API ========== 
+# ========== FUNCTION TO CALL GEMINI API ==========
 def get_triage_classification(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender):
     prompt = generate_prompt(temp, bp_sys, bp_dia, spo2, heart_rate, age, gender)
     
@@ -88,7 +100,7 @@ def get_triage_classification(temp, bp_sys, bp_dia, spo2, heart_rate, age, gende
     except Exception as e:
         return f"Error: {str(e)}"
 
-# ========== FUNCTION TO PARSE AI RESPONSE ========== 
+# ========== FUNCTION TO PARSE AI RESPONSE ==========
 def parse_classification_result(result):
     classification = "Unknown"
     explanation = "Could not determine classification"
@@ -101,7 +113,7 @@ def parse_classification_result(result):
     
     return classification, explanation
 
-# ========== FUNCTION TO PROCESS CHANGED ROW ========== 
+# ========== FUNCTION TO PROCESS CHANGED ROW ==========
 def process_changed_row(row):
     temp = row["Temperature"]
     bp_sys = row["BP_Systolic"]
@@ -133,14 +145,14 @@ def process_changed_row(row):
         "Admission Date": row["Admission Date"]
     })
 
-# ========== WATCHDOG FILE MONITOR ========== 
+# ========== WATCHDOG FILE MONITOR ==========
 class CSVChangeHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if event.src_path.endswith(".csv"):
             print("📂 CSV file updated. Checking for changes...")
             check_for_changes()
 
-# ========== START MONITORING ========== 
+# ========== START MONITORING ==========
 event_handler = CSVChangeHandler()
 observer = Observer()
 observer.schedule(event_handler, path=".", recursive=False)
@@ -150,10 +162,8 @@ print("🔍 Monitoring CSV file for real-time changes...")
 
 # Run FastAPI in a separate thread
 def start_api():
- 
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
-import threading
 api_thread = threading.Thread(target=start_api, daemon=True)
 api_thread.start()
 
