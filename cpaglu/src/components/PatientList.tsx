@@ -1,18 +1,45 @@
 import React, { useState } from 'react';
 import { Patient } from '../types';
 import { FileText, ChevronRight, Search } from 'lucide-react';
+import { getPriorityTag } from './PatientDetail';
+
 
 interface PatientListProps {
   patients: Patient[];
   onSelectPatient: (patient: Patient) => void;
 }
 
+// Define allowed priority values
+type Priority = 'Immediate' | 'Urgent' | 'Delayed';
+
+const priorityOrder: Record<Priority, number> = {
+  Immediate: 1,
+  Urgent: 2,
+  Delayed: 3,
+};
+
+// Function to get the correct tag color
+const getTagColor = (priority: Priority) => {
+  switch (priority) {
+    case 'Immediate': return 'bg-red-100 text-red-600';   // 🔴 Red for Immediate
+    case 'Urgent': return 'bg-orange-100 text-orange-600'; // 🟠 Orange for Urgent
+    case 'Delayed': return 'bg-green-100 text-green-600'; // 🟢 Green for Delayed
+    default: return '';
+  }
+};
+
 const PatientList: React.FC<PatientListProps> = ({ patients, onSelectPatient }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
-  const filteredPatients = patients.filter((patient) =>
-    patient.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter & sort patients by priority
+  const filteredPatients = patients
+  .filter((patient) => patient.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  .sort((a, b) => {
+    const priorityA = getPriorityTag(a).label as Priority;
+    const priorityB = getPriorityTag(b).label as Priority;
+    return priorityOrder[priorityA] - priorityOrder[priorityB];
+  });
+
 
   return (
     <div className="bg-white rounded-lg shadow-md p-4">
@@ -51,6 +78,10 @@ const PatientList: React.FC<PatientListProps> = ({ patients, onSelectPatient }) 
                     </p>
                   </div>
                 </div>
+                {/* Priority Tag */}
+                <span className={`px-2 py-1 text-xs font-semibold rounded-md ${getTagColor(getPriorityTag(patient).label as Priority)}`}>
+                        {getPriorityTag(patient).label}
+                         </span>
                 <ChevronRight className="text-gray-400" size={20} />
               </button>
             </li>

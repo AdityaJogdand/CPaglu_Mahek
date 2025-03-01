@@ -11,8 +11,8 @@ export interface Patient {
   notes?: string;
   vitals?: {
     heartRate: number;
-    bloodPressure: string;
-    temperature: string;
+    bloodPressure: number;
+    temperature: number;
     oxygenSaturation: number;
   };
 }

@@ -120,7 +120,7 @@ const AddPatientModal: React.FC<AddPatientModalProps> = ({ isOpen, onClose, onAd
           <div>
             <label className="block text-sm font-medium text-gray-700">Admission Date</label>
             <input
-              type=""
+              type="date"
               className="w-full p-2 border border-gray-300 rounded-md"
               value={admissionDate}
               onChange={(e) => setAdmissionDate(e.target.value)}
