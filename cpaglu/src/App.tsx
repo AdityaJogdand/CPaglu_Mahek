@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import  { useState } from 'react';
 import Header from './components/Header';
 import PatientList from './components/PatientList';
 import PatientDetail from './components/PatientDetail';
@@ -24,20 +24,21 @@ function App() {
   const [activeTab, setActiveTab] = useState('patients');
 
   const handleAddPatient = (newPatient: Omit<Patient, 'id'>) => {
-    const patientWithId = {
+    const patientWithId: Patient = {
       ...newPatient,
       id: (patients.length + 1).toString(),
       vitals: {
         heartRate: Math.floor(Math.random() * 40) + 60, // 60-100 bpm
-        bloodPressure: `${Math.floor(Math.random() * 40) + 100}/${Math.floor(Math.random() * 20) + 60}`, // 100-140/60-80
-        temperature: (Math.random() * 1.5 + 36.5).toFixed(1), // 36.5-38.0 °C
-        oxygenSaturation: Math.floor(Math.random() * 5) + 95 // 95-100%
+        bloodPressure: Math.floor(Math.random() * 61) + 80, // Single numeric value (80-140 mmHg)
+        temperature: parseFloat((Math.random() * 1.5 + 36.5).toFixed(1)), // 36.5-38.0 °C
+        oxygenSaturation: Math.floor(Math.random() * 6) + 95 // 95-100%
       }
     };
-    
+  
     setPatients([...patients, patientWithId]);
     setIsAddPatientModalOpen(false);
   };
+  
 
   const handleEditPatient = (updatedPatient: Patient) => {
     const updatedPatients = patients.map(patient => 
@@ -227,8 +228,9 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
       <Header onAddPatient={() => setIsAddPatientModalOpen(true)} />
+      <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+    
       
       <main className="container mx-auto py-6 px-4">
         {renderContent()}

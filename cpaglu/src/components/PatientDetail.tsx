@@ -10,9 +10,34 @@ interface PatientDetailProps {
   onDeletePatient: (patient: Patient) => void;
 }
 
-const PatientDetail: React.FC<PatientDetailProps> = ({ 
-  patient, 
-  documents, 
+// Priority tag function
+export const getPriorityTag = (patient: Patient) => {
+  if (!patient.vitals) return { label: 'Unknown', color: 'bg-gray-300' };
+
+  const { heartRate, bloodPressure, temperature, oxygenSaturation } = patient.vitals;
+  const age = patient.age;
+
+  const isImmediate =
+    heartRate > 120 || heartRate < 50 ||
+    bloodPressure > 180 || bloodPressure < 90 ||
+    temperature > 39 || temperature < 35 ||
+    oxygenSaturation < 90;
+
+  const isUrgent =
+    (heartRate >= 100 && heartRate <= 120) ||
+    (bloodPressure >= 140 && bloodPressure <= 180) ||
+    (temperature >= 38 && temperature <= 39) ||
+    (oxygenSaturation >= 90 && oxygenSaturation <= 94) ||
+    age >= 70;
+
+  if (isImmediate) return { label: 'Immediate', color: 'bg-red-500 text-white' };
+  if (isUrgent) return { label: 'Urgent', color: 'bg-orange-500 text-white' };
+  return { label: 'Delayed', color: 'bg-green-500 text-white' };
+};
+
+const PatientDetail: React.FC<PatientDetailProps> = ({
+  patient,
+  documents,
   onAddDocument,
   onEditPatient,
   onDeletePatient
@@ -26,6 +51,7 @@ const PatientDetail: React.FC<PatientDetailProps> = ({
     );
   }
 
+  const priorityTag = getPriorityTag(patient);
   const patientDocuments = documents.filter(doc => doc.patientId === patient.id);
 
   return (
@@ -33,37 +59,21 @@ const PatientDetail: React.FC<PatientDetailProps> = ({
       <div className="bg-blue-50 p-6 border-b border-blue-100">
         <div className="flex justify-between items-start">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800">{patient.name}</h2>
+            <div className="flex items-center">
+              <h2 className="text-2xl font-bold text-gray-800">{patient.name}</h2>
+              <span className={`ml-3 px-3 py-1 rounded-full text-sm font-semibold ${priorityTag.color}`}>
+                {priorityTag.label}
+              </span>
+            </div>
             <div className="mt-2 flex flex-wrap gap-4">
-              <div className="flex items-center text-gray-600">
-                <Calendar size={16} className="mr-1" />
-                <span>Admitted: {patient.admissionDate}</span>
-              </div>
-              <div className="flex items-center text-gray-600">
-                <Phone size={16} className="mr-1" />
-                <span>{patient.contactNumber}</span>
-              </div>
-              <div className="flex items-center text-red-600">
-                <AlertCircle size={16} className="mr-1" />
-                <span>{patient.medicalCondition}</span>
-              </div>
+              <DetailItem icon={<Calendar size={16} />} text={`Admitted: ${patient.admissionDate}`} />
+              <DetailItem icon={<Phone size={16} />} text={patient.contactNumber} />
+              <DetailItem icon={<AlertCircle size={16} className="text-red-600" />} text={patient.medicalCondition} />
             </div>
           </div>
           <div className="flex space-x-2">
-            <button 
-              onClick={() => onEditPatient(patient)}
-              className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-              title="Edit Patient"
-            >
-              <Edit size={20} />
-            </button>
-            <button 
-              onClick={() => onDeletePatient(patient)}
-              className="p-2 text-red-600 hover:bg-red-50 rounded-full transition-colors"
-              title="Delete Patient"
-            >
-              <Trash2 size={20} />
-            </button>
+            <ActionButton onClick={() => onEditPatient(patient)} icon={<Edit size={20} />} color="blue" title="Edit Patient" />
+            <ActionButton onClick={() => onDeletePatient(patient)} icon={<Trash2 size={20} />} color="red" title="Delete Patient" />
           </div>
         </div>
       </div>
@@ -72,111 +82,68 @@ const PatientDetail: React.FC<PatientDetailProps> = ({
         <div className="p-4 bg-gray-50 border-b border-gray-200">
           <h3 className="text-lg font-semibold mb-3 text-gray-800">Vital Signs</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-              <div className="flex items-center mb-2">
-                <Heart className="text-red-500 mr-2" size={20} />
-                <span className="text-sm font-medium text-gray-600">Heart Rate</span>
-              </div>
-              <div className="flex items-baseline">
-                <span className="text-2xl font-bold text-gray-800">{patient.vitals.heartRate}</span>
-                <span className="ml-1 text-gray-500 text-sm">bpm</span>
-              </div>
-            </div>
-            
-            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-              <div className="flex items-center mb-2">
-                <Activity className="text-blue-500 mr-2" size={20} />
-                <span className="text-sm font-medium text-gray-600">Blood Pressure</span>
-              </div>
-              <div className="flex items-baseline">
-                <span className="text-2xl font-bold text-gray-800">{patient.vitals.bloodPressure}</span>
-                <span className="ml-1 text-gray-500 text-sm">mmHg</span>
-              </div>
-            </div>
-            
-            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-              <div className="flex items-center mb-2">
-                <Thermometer className="text-orange-500 mr-2" size={20} />
-                <span className="text-sm font-medium text-gray-600">Temperature</span>
-              </div>
-              <div className="flex items-baseline">
-                <span className="text-2xl font-bold text-gray-800">{patient.vitals.temperature}</span>
-                <span className="ml-1 text-gray-500 text-sm">°C</span>
-              </div>
-            </div>
-            
-            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-              <div className="flex items-center mb-2">
-                <Droplet className="text-indigo-500 mr-2" size={20} />
-                <span className="text-sm font-medium text-gray-600">O₂ Saturation</span>
-              </div>
-              <div className="flex items-baseline">
-                <span className="text-2xl font-bold text-gray-800">{patient.vitals.oxygenSaturation}</span>
-                <span className="ml-1 text-gray-500 text-sm">%</span>
-              </div>
-            </div>
+            <VitalSign icon={<Heart className="text-red-500" size={20} />} label="Heart Rate" value={patient.vitals.heartRate} unit="bpm" />
+            <VitalSign icon={<Activity className="text-blue-500" size={20} />} label="Blood Pressure" value={patient.vitals.bloodPressure} unit="mmHg" />
+            <VitalSign icon={<Thermometer className="text-orange-500" size={20} />} label="Temperature" value={patient.vitals.temperature} unit="°C" />
+            <VitalSign icon={<Droplet className="text-indigo-500" size={20} />} label="O₂ Saturation" value={patient.vitals.oxygenSaturation} unit="%" />
           </div>
         </div>
       )}
 
+      
+        
       <div className="p-6">
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2 text-gray-800">Patient Information</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-gray-500">Age</p>
-              <p>{patient.age} years</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">Gender</p>
-              <p>{patient.gender}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">Emergency Contact</p>
-              <p>{patient.emergencyContact}</p>
-            </div>
-          </div>
-        </div>
+        <h3 className="text-lg font-semibold mb-2 text-gray-800">Documents</h3>
+        <button onClick={() => onAddDocument(patient.id)} className="flex items-center text-blue-600 hover:text-blue-800 transition-colors mb-2">
+          <PlusCircle size={18} className="mr-1" />
+          <span>Add Document</span>
+        </button>
 
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2 text-gray-800">Notes</h3>
-          <p className="bg-gray-50 p-3 rounded-md text-gray-700">{patient.notes}</p>
-        </div>
-
-        <div>
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="text-lg font-semibold text-gray-800">Documents</h3>
-            <button 
-              onClick={() => onAddDocument(patient.id)}
-              className="flex items-center text-blue-600 hover:text-blue-800 transition-colors"
-            >
-              <PlusCircle size={18} className="mr-1" />
-              <span>Add Document</span>
-            </button>
-          </div>
-          
-          {patientDocuments.length === 0 ? (
-            <p className="text-gray-500 text-center py-4 bg-gray-50 rounded-md">No documents available</p>
-          ) : (
-            <ul className="divide-y divide-gray-200 border border-gray-200 rounded-md">
-              {patientDocuments.map((doc) => (
-                <li key={doc.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
-                  <div className="flex items-center">
-                    <FileText className="text-blue-600 mr-2" size={18} />
-                    <div>
-                      <p className="font-medium">{doc.name}</p>
-                      <p className="text-sm text-gray-500">{doc.type} • {doc.uploadDate}</p>
-                    </div>
-                  </div>
-                  <a href={doc.url} className="text-blue-600 hover:underline text-sm">View</a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {patientDocuments.length === 0 ? (
+          <p className="text-gray-500 text-center py-4 bg-gray-50 rounded-md">No documents available</p>
+        ) : (
+          <ul className="divide-y divide-gray-200 border border-gray-200 rounded-md">
+            {patientDocuments.map((doc) => (
+              <li key={doc.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
+                <DetailItem icon={<FileText className="text-blue-600" size={18} />} text={doc.name} />
+                <a href={doc.url} className="text-blue-600 hover:underline text-sm">View</a>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
 };
+
+// ✅ Fix: Add missing types for `VitalSign` component
+interface VitalSignProps {
+  icon: JSX.Element;
+  label: string;
+  value: number;
+  unit: string;
+}
+
+const VitalSign: React.FC<VitalSignProps> = ({ icon, label, value, unit }) => (
+  <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+    <div className="flex items-center mb-2">{icon}<span className="text-sm font-medium text-gray-600 ml-2">{label}</span></div>
+    <div className="flex items-baseline"><span className="text-2xl font-bold text-gray-800">{value}</span><span className="ml-1 text-gray-500 text-sm">{unit}</span></div>
+  </div>
+);
+
+// ✅ Fix: Add missing `ActionButton` component
+const ActionButton: React.FC<{ onClick: () => void; icon: JSX.Element; color: string; title: string }> = ({ onClick, icon, color, title }) => (
+  <button onClick={onClick} className={`p-2 text-${color}-600 hover:bg-${color}-50 rounded-full transition-colors`} title={title}>
+    {icon}
+  </button>
+);
+
+// ✅ Fix: Add missing `DetailItem` component
+const DetailItem: React.FC<{ icon: JSX.Element; text: string }> = ({ icon, text }) => (
+  <div className="flex items-center text-gray-600">
+    {icon}
+    <span className="ml-1">{text}</span>
+  </div>
+);
 
 export default PatientDetail;

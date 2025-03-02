@@ -3,15 +3,16 @@ export interface Patient {
   name: string;
   age: number;
   gender: string;
+  condition: string,
   contactNumber: string;
-  emergencyContact: string;
-  admissionDate: string;
-  medicalCondition: string;
-  notes: string;
+  emergencyContact?: string;
+  admissionDate?: string;
+  medicalCondition?: string;
+  notes?: string;
   vitals?: {
     heartRate: number;
-    bloodPressure: string;
-    temperature: string;
+    bloodPressure: number;
+    temperature: number;
     oxygenSaturation: number;
   };
 }
