@@ -1,35 +1,64 @@
 # Node.js dependencies
 node_modules/
-package-lock.json
-
-# Build output
-dist/
-.out/
-.vite/
-
-# Environment and config files
-.env
-.env.local
-.env.development
-.env.production
-firebase.json
-
-# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-triage_log.txt
 
-# VS Code settings
+# Build artifacts
+dist/
+build/
+.vite/
 .vscode/
 
-# OS-specific files
-.DS_Store
-Thumbs.db
+# Environment variables
+.env
+.vite-env.d.ts
 
-# CSV data files (optional)
-*.csv
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Ignore the env directory (if it contains sensitive data)
+# TypeScript
+*.tsbuildinfo
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Compiled files
+*.out
+*.exe
+*.dll
+*.pyc
+__pycache__/
+
+# Python virtual environment
 env/
+venv/
+
+# Python environment variables
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.sqlite3
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# CSV and log files (optional)
+*.csv
+*.log
+
+# Firebase config (optional, if sensitive)
+firebase.json

@@ -1,539 +1,392 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Phone, AlertCircle, FileText, PlusCircle, Edit, Trash2, Heart, Activity, Thermometer, Droplet } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-// Enhanced Patient interface with updated vitals
 interface Patient {
-    id: string;
-    name: string;
-    age: number;
-    gender: string;
-    admissionDate: string;
-    contactNumber: string;
-    medicalCondition: string;
-    vitals: {
-        heartRate: number;
-        bloodPressure: number;
-        bloodPressureDiastolic?: number; // Added diastolic blood pressure
-        temperature: number;
-        oxygenSaturation: number;
-    };
-    classification?: string;
-}
-
-// Document interface
-interface Document {
-    id: string;
-    patientId: string;
-    name: string;
-    url: string;
+  Name: string;
+  Temperature: number;
+  BP_Systolic: number;
+  BP_Diastolic: number;
+  SpO2: number;
+  Heart_Rate: number;
+  Age: number;
+  Gender: string;
+  Classification: string;
+  Explanation: string;
+  Admission_Date: string;
 }
 
 interface PatientDetailProps {
-    patientName?: string; // Name of the selected patient from patientList
-    patient: Patient | null;
-    documents: Document[];
-    onAddDocument: (patientId: string) => void;
-    onEditPatient: (patient: Patient) => void;
-    onDeletePatient: (patient: Patient) => void;
-    setPatient: (patient: Patient | null) => void; // Required to update patient state
+  patient: Patient | null;
 }
 
-// Sample interface for vital sign history
-interface VitalHistory {
-    timestamp: string;
-    heartRate: number;
-    bloodPressure: number;
-    bloodPressureDiastolic?: number;
-    temperature: number;
-    oxygenSaturation: number;
-}
-
-// API Response interface based on the provided sample
-interface APIPatientResponse {
-    "Admission Date": string;
-    "Age": number;
-    "BP_Diastolic": number;
-    "BP_Systolic": number;
-    "Classification": string;
-    "Explanation": string;
-    "Gender": string;
-    "Heart Rate": number;
-    "Name": string;
-    "SpO2": number;
-    "Temperature": number;
-}
-
-// Priority tag function
-export const getPriorityTag = (patient: Patient) => {
-    if (!patient.vitals) return { label: 'Unknown', color: 'bg-gray-300' };
-
-    const { heartRate, bloodPressure, temperature, oxygenSaturation } = patient.vitals;
-    const age = patient.age;
-
-    const isImmediate =
-        heartRate > 120 || heartRate < 50 ||
-        bloodPressure > 180 || bloodPressure < 90 ||
-        temperature > 39 || temperature < 35 ||
-        oxygenSaturation < 90;
-
-    const isUrgent =
-        (heartRate >= 100 && heartRate <= 120) ||
-        (bloodPressure >= 140 && bloodPressure <= 180) ||
-        (temperature >= 38 && temperature <= 39) ||
-        (oxygenSaturation >= 90 && oxygenSaturation <= 94) ||
-        age >= 70;
-
-    if (isImmediate) return { label: 'Immediate', color: 'bg-red-500 text-white' };
-    if (isUrgent) return { label: 'Urgent', color: 'bg-orange-500 text-white' };
-    return { label: 'Delayed', color: 'bg-green-500 text-white' };
+// Mock historical data for demo purposes
+const generateMockHistory = (patient: Patient | null) => {
+  if (!patient) return [];
+  
+  const baseTime = new Date();
+  const history = [];
+  
+  // Generate data points for the past 12 hours (1 per hour)
+  for (let i = 12; i >= 0; i--) {
+    const time = new Date(baseTime);
+    time.setHours(baseTime.getHours() - i);
+    
+    // Generate slight variations in vital signs
+    const tempVariation = (Math.random() * 0.6) - 0.3;
+    const hrVariation = Math.floor((Math.random() * 10) - 5);
+    const sysVariation = Math.floor((Math.random() * 10) - 5);
+    const diasVariation = Math.floor((Math.random() * 6) - 3);
+    const spo2Variation = (Math.random() * 2) - 1;
+    
+    history.push({
+      time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      Temperature: parseFloat((patient.Temperature + tempVariation).toFixed(1)),
+      Heart_Rate: patient.Heart_Rate + hrVariation,
+      BP_Systolic: patient.BP_Systolic + sysVariation,
+      BP_Diastolic: patient.BP_Diastolic + diasVariation,
+      SpO2: Math.min(100, Math.max(90, patient.SpO2 + spo2Variation))
+    });
+  }
+  
+  return history;
 };
 
-// Function to convert API response to Patient object
-const convertAPIResponseToPatient = (apiData: APIPatientResponse): Patient => {
-    // Ensure all required fields have fallback values
-    const patient: Patient = { // Explicit type annotation
-        id: apiData.Name ? apiData.Name.toLowerCase().replace(/\s+/g, '-') : `patient-${Date.now()}`,
-        name: apiData.Name || 'Unknown Patient',
-        age: apiData.Age || 0,
-        gender: apiData.Gender || 'Unknown',
-        admissionDate: apiData["Admission Date"] || new Date().toISOString().split('T')[0],
-        contactNumber: 'N/A', // Not provided in API data
-        medicalCondition: apiData.Explanation || 'N/A',
-        vitals: {
-            heartRate: apiData["Heart Rate"] || 0,
-            bloodPressure: apiData.BP_Systolic || 0, //Systolic
-            bloodPressureDiastolic: apiData.BP_Diastolic || 0,
-            temperature: apiData.Temperature || 0,
-            oxygenSaturation: apiData.SpO2 || 0
-        },
-        classification: apiData.Classification || ''
-    };
-
-    console.log("Converted Patient Data: ", patient); // Keep the log for debugging
-
-    return patient;
-};
-
-const PatientDetail: React.FC<PatientDetailProps> = ({
-    patientName,
-    patient,
-    documents,
-    onAddDocument,
-    onEditPatient,
-    onDeletePatient,
-    setPatient
-}) => {
-    const [vitalHistory, setVitalHistory] = useState<VitalHistory[]>([]);
-    const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string | null>(null);
-
-    // Fetch patient data when patientName changes
-    useEffect(() => {
-        if (patientName) {
-            fetchPatientData(patientName);
-        }
-    }, [patientName]);
-
-    const fetchPatientData = async (name: string) => {
-        setIsLoading(true);
-        setError(null);
-        try {
-            // Make the actual API call to your endpoint
-            const response = await fetch(`http://localhost:8000/patients/${name}`);
-
-            if (!response.ok) {
-                throw new Error(`API returned status: ${response.status}`);
-            }
-
-            const apiData: APIPatientResponse = await response.json();
-            console.log('API data received:', apiData);
-
-            // Convert API data to Patient object
-            const patientData = convertAPIResponseToPatient(apiData);
-            console.log('Converted patient data:', patientData);
-
-            // Update the patient state
-            setPatient(patientData);
-            console.log('Patient data set:', patientData);
-
-            // Generate mock vital history based on the fetched patient data
-            generateMockVitalHistory(patientData);
-
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'An error occurred while fetching patient data');
-            console.error('Error fetching patient data:', err);
-
-            // Fallback to sample data for development/testing
-            // Remove this in production environment
-            try {
-                const apiData: APIPatientResponse = {
-                    "Admission Date": "2025-02-02",
-                    "Age": 84,
-                    "BP_Diastolic": 53,
-                    "BP_Systolic": 139,
-                    "Classification": "Immediate",
-                    "Explanation": "The patient presents with a high temperature (40.02 °C), concerning blood pressure (139/53 mmHg), and significantly low SpO2 (87%). The low SpO2, particularly in an elderly patient and indicates severe respiratory compromise and requires immediate intervention. While the heart rate is within a reasonable range, the combination of hypoxia and fever necessitates immediate attention to prevent further deterioration. The wide pulse pressure (difference between systolic and diastolic BP) may also be concerning in this elderly patient.",
-                    "Gender": "Male",
-                    "Heart Rate": 96,
-                    "Name": "Aditya",
-                    "SpO2": 87,
-                    "Temperature": 40.02
-                };
-
-                console.log('Using fallback data:', apiData);
-
-                // Convert API data to Patient object
-                const patientData = convertAPIResponseToPatient(apiData);
-                
-                // Update the patient state
-                setPatient(patientData);
-                console.log('Patient data set (fallback):', patientData);
-
-                // Generate mock history based on the fetched patient data
-                generateMockVitalHistory(patientData);
-            } catch (fallbackErr) {
-                console.error('Error using fallback data:', fallbackErr);
-            }
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    // Generate mock vital sign history data for demonstration
-    const generateMockVitalHistory = (patientData: Patient) => {
-        if (!patientData || !patientData.vitals) {
-            console.log("No patient data or vitals to generate history for.");
-            return;
-        }
-
-        const now = new Date();
-        const history: VitalHistory[] = [];
-
-        // Generate 24 hours of data points, one per hour
-        for (let i = 24; i >= 0; i--) {
-            const date = new Date(now.getTime() - i * 60 * 60 * 1000);
-            const timestamp = date.toISOString();
-
-            const baseHr = patientData.vitals.heartRate;
-            const baseBp = patientData.vitals.bloodPressure;
-            const baseBpDiastolic = patientData.vitals.bloodPressureDiastolic || baseBp - 40;
-            const baseTemp = patientData.vitals.temperature;
-            const baseSpo2 = patientData.vitals.oxygenSaturation;
-
-            // Add some variability to the data
-            history.push({
-                timestamp,
-                heartRate: baseHr + Math.floor(Math.random() * 10 - 5),
-                bloodPressure: baseBp + Math.floor(Math.random() * 20 - 10),
-                bloodPressureDiastolic: baseBpDiastolic + Math.floor(Math.random() * 16 - 8),
-                temperature: baseTemp + (Math.random() * 0.6 - 0.3),
-                oxygenSaturation: Math.min(100, baseSpo2 + Math.floor(Math.random() * 4 - 2))
-            });
-        }
-
-        setVitalHistory(history);
-        console.log("Vital history generated: ", history);
-    };
-
-    useEffect(() => {
-        console.log("Patient object in PatientDetail component: ", patient);
-        if (patient && patient.vitals) {
-            console.log("Patient vitals: ", patient.vitals);
-        }
-    }, [patient]);
-
-    if (!patient) {
-        return (
-            <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
-                <FileText size={48} className="mx-auto mb-4 text-gray-300" />
-                <h3 className="text-xl font-medium">Select a patient to view details</h3>
-            </div>
-        );
+const PatientDetail: React.FC<PatientDetailProps> = ({ patient }) => {
+  const [activeTab, setActiveTab] = useState<string>('overview');
+  const [vitalData, setVitalData] = useState<any[]>([]);
+  const [showAllData, setShowAllData] = useState<boolean>(false);
+  
+  useEffect(() => {
+    // Generate mock historical data when patient changes
+    if (patient) {
+      setVitalData(generateMockHistory(patient));
     }
-
-    let priorityTag = { label: 'Unknown', color: 'bg-gray-300' };
-
-    // Use the classification from the API if available
-    if (patient.classification) {
-        const classification = patient.classification;
-        if (classification === 'Immediate') {
-            priorityTag = { label: 'Immediate', color: 'bg-red-500 text-white' };
-        } else if (classification === 'Urgent') {
-            priorityTag = { label: 'Urgent', color: 'bg-orange-500 text-white' };
-        } else if (classification === 'Delayed') {
-            priorityTag = { label: 'Delayed', color: 'bg-green-500 text-white' };
-        }
-    } else {
-        priorityTag = getPriorityTag(patient);
+  }, [patient]);
+  
+  // Function to determine styling based on classification
+  const getClassificationColor = (classification: string) => {
+    switch (classification.toLowerCase()) {
+      case 'immediate':
+        return 'text-red-600 bg-red-50 border-red-200';
+      case 'urgent':
+        return 'text-yellow-600 bg-yellow-50 border-yellow-200';
+      case 'delayed':
+        return 'text-green-600 bg-green-50 border-green-200';
+      default:
+        return 'text-gray-600 bg-gray-50 border-gray-200';
     }
-
-    const patientDocuments = documents.filter(doc => doc.patientId === patient.id);
-
-    // Format timestamp for display in charts
-    const formatTimestamp = (timestamp: string) => {
-        const date = new Date(timestamp);
-        return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
-    };
-
-    // Process data for charts
-    const chartData = vitalHistory.map(record => ({
-        ...record,
-        time: formatTimestamp(record.timestamp)
-    }));
-
+  };
+  
+  // Function to evaluate vital sign status
+  const getVitalSignStatus = (name: string, value: number) => {
+    // These ranges are simplified and should be adjusted according to medical guidelines
+    switch (name) {
+      case 'Temperature':
+        if (value < 35) return 'text-blue-600'; // Low
+        if (value > 38) return 'text-red-600'; // High
+        return 'text-green-600'; // Normal
+        
+      case 'BP_Systolic':
+        if (value < 90) return 'text-blue-600'; // Low
+        if (value > 140) return 'text-red-600'; // High
+        return 'text-green-600'; // Normal
+        
+      case 'BP_Diastolic':
+        if (value < 60) return 'text-blue-600'; // Low
+        if (value > 90) return 'text-red-600'; // High
+        return 'text-green-600'; // Normal
+        
+      case 'SpO2':
+        if (value < 95) return 'text-red-600'; // Low
+        return 'text-green-600'; // Normal
+        
+      case 'Heart_Rate':
+        if (value < 60) return 'text-blue-600'; // Low
+        if (value > 100) return 'text-red-600'; // High
+        return 'text-green-600'; // Normal
+        
+      default:
+        return 'text-gray-600';
+    }
+  };
+  
+  // Get icon for vital sign
+  const getVitalIcon = (name: string) => {
+    switch (name) {
+      case 'Temperature': return '🌡️';
+      case 'BP_Systolic': 
+      case 'BP_Diastolic': return '🫀';
+      case 'SpO2': return '💨';
+      case 'Heart_Rate': return '❤️';
+      default: return '📊';
+    }
+  };
+  
+  // Get line color for charts
+  const getLineColor = (name: string) => {
+    switch (name) {
+      case 'Temperature': return '#ef4444';
+      case 'BP_Systolic': return '#3b82f6';
+      case 'BP_Diastolic': return '#60a5fa';
+      case 'SpO2': return '#10b981';
+      case 'Heart_Rate': return '#ec4899';
+      default: return '#6b7280';
+    }
+  };
+  
+  if (!patient) {
     return (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            {isLoading && (
-                <div className="p-4 bg-blue-50 text-center">
-                    <p className="text-blue-700">Loading patient data...</p>
-                </div>
-            )}
-
-            {error && (
-                <div className="p-4 bg-red-50 text-center">
-                    <p className="text-red-700">{error}</p>
-                </div>
-            )}
-
-            <div className="bg-blue-50 p-6 border-b border-blue-100">
-                <div className="flex justify-between items-start">
-                    <div>
-                        <div className="flex items-center">
-                            <h2 className="text-2xl font-bold text-gray-800">{patient.name}</h2>
-                            <span className={`ml-3 px-3 py-1 rounded-full text-sm font-semibold ${priorityTag.color}`}>
-                                {priorityTag.label}
-                            </span>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-4">
-                            <DetailItem icon={<Calendar size={16} />} text={`${patient.age} yrs, ${patient.gender}`} />
-                            <DetailItem icon={<Calendar size={16} />} text={`Admitted: ${patient.admissionDate}`} />
-                            {patient.contactNumber && (
-                                <DetailItem icon={<Phone size={16} />} text={patient.contactNumber} />
-                            )}
-                            <DetailItem icon={<AlertCircle size={16} />} text={patient.medicalCondition} />
-                        </div>
-                    </div>
-                    <div className="flex space-x-2">
-                        <ActionButton onClick={() => onEditPatient(patient)} icon={<Edit size={20} />} color="blue" title="Edit Patient" />
-                        <ActionButton onClick={() => onDeletePatient(patient)} icon={<Trash2 size={20} />} color="red" title="Delete Patient" />
-                    </div>
-                </div>
-            </div>
-
-            {/* Current Vital Signs */}
-            {patient.vitals && (
-                <div className="p-4 bg-gray-50 border-b border-gray-200">
-                    <h3 className="text-lg font-semibold mb-3 text-gray-800">Current Vital Signs</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <VitalSign
-                            icon={<Heart className="text-red-500" size={20} />}
-                            label="Heart Rate"
-                            value={patient.vitals.heartRate}
-                            unit="bpm"
-                            patient={patient}
-                        />
-                        <VitalSign
-                            icon={<Activity className="text-blue-500" size={20} />}
-                            label="Blood Pressure"
-                            value={patient.vitals.bloodPressure}
-                            unit="mmHg"
-                            patient={patient}
-                        />
-                        <VitalSign
-                            icon={<Thermometer className="text-orange-500" size={20} />}
-                            label="Temperature"
-                            value={patient.vitals.temperature}
-                            unit="°C"
-                            patient={patient}
-                        />
-                        <VitalSign
-                            icon={<Droplet className="text-indigo-500" size={20} />}
-                            label="O₂ Saturation"
-                            value={patient.vitals.oxygenSaturation}
-                            unit="%"
-                            patient={patient}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* Vital Signs Charts */}
-            <div className="p-6 border-b border-gray-200">
-                <h3 className="text-lg font-semibold mb-3 text-gray-800">Vital Signs History</h3>
-
-                {isLoading ? (
-                    <div className="text-center py-4">
-                        <p className="text-gray-500">Loading vital signs data...</p>
-                    </div>
-                ) : error ? (
-                    <div className="text-center py-4">
-                        <p className="text-red-500">{error}</p>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Heart Rate Chart */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="text-md font-semibold mb-2 flex items-center">
-                                <Heart className="text-red-500 mr-2" size={18} />
-                                Heart Rate History
-                            </h4>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={chartData}>
-                                        <CartesianGrid strokeDasharray="3 3" />
-                                        <XAxis dataKey="time" />
-                                        <YAxis domain={['dataMin - 10', 'dataMax + 10']} />
-                                        <Tooltip />
-                                        <Line type="monotone" dataKey="heartRate" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        {/* Blood Pressure Chart */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="text-md font-semibold mb-2 flex items-center">
-                                <Activity className="text-blue-500 mr-2" size={18} />
-                                Blood Pressure History
-                            </h4>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={chartData}>
-                                        <CartesianGrid strokeDasharray="3 3" />
-                                        <XAxis dataKey="time" />
-                                        <YAxis />
-                                        <Tooltip />
-                                        <Line type="monotone" dataKey="bloodPressure" name="Systolic" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
-                                        <Line type="monotone" dataKey="bloodPressureDiastolic" name="Diastolic" stroke="#93c5fd" strokeWidth={2} dot={{ r: 2 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        {/* Temperature Chart */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="text-md font-semibold mb-2 flex items-center">
-                                <Thermometer className="text-orange-500 mr-2" size={18} />
-                                Temperature History
-                            </h4>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={chartData}>
-                                        <CartesianGrid strokeDasharray="3 3" />
-                                        <XAxis dataKey="time" />
-                                        <YAxis domain={['dataMin - 2', 'dataMax + 2']} />
-                                        <Tooltip />
-                                        <Line type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={{ r: 2 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        {/* Oxygen Saturation Chart */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="text-md font-semibold mb-2 flex items-center">
-                                <Droplet className="text-indigo-500 mr-2" size={18} />
-                                O₂ Saturation History
-                            </h4>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={chartData}>
-                                        <CartesianGrid strokeDasharray="3 3" />
-                                        <XAxis dataKey="time" />
-                                        <YAxis domain={[80, 100]} />
-                                        <Tooltip />
-                                        <Line type="monotone" dataKey="oxygenSaturation" stroke="#6366f1" strokeWidth={2} dot={{ r: 2 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* Patient Documents Section */}
-            <div className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-gray-800">Patient Documents</h3>
-                    <button
-                        onClick={() => onAddDocument(patient.id)}
-                        className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-                    >
-                        <div className="flex items-center">
-                            <PlusCircle size={16} className="mr-2" />
-                            Add Document
-                        </div>
-                    </button>
-                </div>
-
-                {patientDocuments.length === 0 ? (
-                    <p className="text-gray-500">No documents uploaded for this patient.</p>
-                ) : (
-                    <ul className="list-disc pl-5">
-                        {patientDocuments.map(doc => (
-                            <li key={doc.id} className="py-2">
-                                <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">
-                                    {doc.name}
-                                </a>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
+      <div className="p-8 bg-gray-50 rounded-lg text-center shadow-inner animate-fadeIn">
+        <div className="opacity-50 mb-4">
+          <svg className="w-20 h-20 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          </svg>
         </div>
+        <p className="text-lg text-gray-500 font-medium">No patient selected</p>
+        <p className="text-sm text-gray-400 mt-2">Select a patient from the list to view details</p>
+      </div>
     );
-};
-
-interface DetailItemProps {
-    icon: React.ReactNode;
-    text: string;
-}
-
-const DetailItem: React.FC<DetailItemProps> = ({ icon, text }) => (
-    <div className="flex items-center text-gray-600 mr-4">
-        {icon}
-        <span className="ml-2 text-sm">{text}</span>
+  }
+  
+  return (
+    <div className="bg-white rounded-lg shadow-md transition-all duration-500 animate-fadeIn">
+      {/* Patient header */}
+      <div className="flex justify-between items-start p-6 border-b">
+        <div className="flex items-center space-x-4">
+          <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 font-bold text-lg">
+            {patient.Name.charAt(0)}
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold">{patient.Name}</h2>
+            <p className="text-gray-500">
+              {patient.Age} y/o {patient.Gender} • Admitted: {patient.Admission_Date}
+            </p>
+          </div>
+        </div>
+        <div className={`px-4 py-2 rounded-full font-semibold border ${getClassificationColor(patient.Classification)}`}>
+          {patient.Classification}
+        </div>
+      </div>
+      
+      {/* Tab navigation */}
+      <div className="border-b px-6">
+        <nav className="flex space-x-6">
+          <button
+            className={`py-3 font-medium border-b-2 transition-colors ${
+              activeTab === 'overview' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+            onClick={() => setActiveTab('overview')}
+          >
+            Overview
+          </button>
+          <button
+            className={`py-3 font-medium border-b-2 transition-colors ${
+              activeTab === 'trends' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+            onClick={() => setActiveTab('trends')}
+          >
+            Vital Trends
+          </button>
+          <button
+            className={`py-3 font-medium border-b-2 transition-colors ${
+              activeTab === 'assessment' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+            onClick={() => setActiveTab('assessment')}
+          >
+            Assessment
+          </button>
+        </nav>
+      </div>
+      
+      {/* Tab content */}
+      <div className="p-6">
+        {activeTab === 'overview' && (
+          <div className="animate-fadeIn">
+            {/* Vital signs overview */}
+            <h3 className="text-lg font-semibold mb-3">Current Vital Signs</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="p-4 bg-gray-50 rounded shadow-sm transition-transform hover:transform hover:scale-105">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-500">Temperature</p>
+                  <span className="text-2xl">🌡️</span>
+                </div>
+                <p className={`text-xl font-semibold ${getVitalSignStatus('Temperature', patient.Temperature)}`}>
+                  {patient.Temperature} °C
+                </p>
+              </div>
+              
+              <div className="p-4 bg-gray-50 rounded shadow-sm transition-transform hover:transform hover:scale-105">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-500">Blood Pressure</p>
+                  <span className="text-2xl">🫀</span>
+                </div>
+                <p className="text-xl font-semibold">
+                  <span className={getVitalSignStatus('BP_Systolic', patient.BP_Systolic)}>{patient.BP_Systolic}</span>
+                  {' / '}
+                  <span className={getVitalSignStatus('BP_Diastolic', patient.BP_Diastolic)}>{patient.BP_Diastolic}</span>
+                  {' mmHg'}
+                </p>
+              </div>
+              
+              <div className="p-4 bg-gray-50 rounded shadow-sm transition-transform hover:transform hover:scale-105">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-500">Oxygen Saturation</p>
+                  <span className="text-2xl">💨</span>
+                </div>
+                <p className={`text-xl font-semibold ${getVitalSignStatus('SpO2', patient.SpO2)}`}>
+                  {patient.SpO2}%
+                </p>
+              </div>
+              
+              <div className="p-4 bg-gray-50 rounded shadow-sm transition-transform hover:transform hover:scale-105">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-gray-500">Heart Rate</p>
+                  <span className="text-2xl">❤️</span>
+                </div>
+                <p className={`text-xl font-semibold ${getVitalSignStatus('Heart_Rate', patient.Heart_Rate)}`}>
+                  {patient.Heart_Rate} BPM
+                </p>
+              </div>
+            </div>
+            
+            {/* Patient summary */}
+            <h3 className="text-lg font-semibold mb-3">Patient Summary</h3>
+            <div className="p-4 bg-gray-50 rounded shadow-sm mb-4">
+              <p className="text-gray-700 whitespace-pre-line">{patient.Explanation}</p>
+            </div>
+          </div>
+        )}
+        
+        {activeTab === 'trends' && (
+          <div className="animate-fadeIn">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">Vital Sign Trends</h3>
+              <button 
+                className="px-3 py-1 text-sm bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors"
+                onClick={() => setShowAllData(!showAllData)}
+              >
+                {showAllData ? 'Show Individual Charts' : 'Show Combined Chart'}
+              </button>
+            </div>
+            
+            {showAllData ? (
+              <div className="bg-white p-4 rounded shadow-sm h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={vitalData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="time" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line type="monotone" dataKey="Temperature" stroke={getLineColor('Temperature')} dot={false} name="Temp (°C)" />
+                    <Line type="monotone" dataKey="Heart_Rate" stroke={getLineColor('Heart_Rate')} dot={false} name="HR (BPM)" />
+                    <Line type="monotone" dataKey="BP_Systolic" stroke={getLineColor('BP_Systolic')} dot={false} name="BP Sys" />
+                    <Line type="monotone" dataKey="BP_Diastolic" stroke={getLineColor('BP_Diastolic')} dot={false} name="BP Dia" />
+                    <Line type="monotone" dataKey="SpO2" stroke={getLineColor('SpO2')} dot={false} name="SpO2 (%)" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {['Temperature', 'Heart_Rate', 'BP_Systolic', 'SpO2'].map((vitalSign) => (
+                  <div key={vitalSign} className="bg-white p-4 rounded shadow-sm h-56 transition-transform hover:shadow-md">
+                    <h4 className="text-sm font-medium mb-2 flex items-center">
+                      <span className="mr-2">{getVitalIcon(vitalSign)}</span>
+                      {vitalSign === 'BP_Systolic' ? 'Blood Pressure' : vitalSign.replace('_', ' ')}
+                    </h4>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <LineChart data={vitalData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="time" />
+                        <YAxis />
+                        <Tooltip />
+                        {vitalSign === 'BP_Systolic' ? (
+                          <>
+                            <Line type="monotone" dataKey="BP_Systolic" stroke={getLineColor('BP_Systolic')} dot={false} name="Systolic" />
+                            <Line type="monotone" dataKey="BP_Diastolic" stroke={getLineColor('BP_Diastolic')} dot={false} name="Diastolic" />
+                          </>
+                        ) : (
+                          <Line type="monotone" dataKey={vitalSign} stroke={getLineColor(vitalSign)} dot={false} />
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {activeTab === 'assessment' && (
+          <div className="animate-fadeIn">
+            <h3 className="text-lg font-semibold mb-3">Medical Assessment</h3>
+            <div className="p-6 bg-gray-50 rounded shadow-sm">
+              <div className="flex items-start space-x-3 mb-4">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  patient.Classification.toLowerCase() === 'immediate' ? 'bg-red-100 text-red-600' :
+                  patient.Classification.toLowerCase() === 'urgent' ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'
+                }`}>
+                  {patient.Classification.toLowerCase() === 'immediate' ? '!' : 
+                   patient.Classification.toLowerCase() === 'urgent' ? '⚠️' : '✓'}
+                </div>
+                <div>
+                  <h4 className="font-semibold">{patient.Classification} Priority</h4>
+                </div>
+              </div>
+              <p className="text-gray-700 whitespace-pre-line leading-relaxed">
+                {patient.Explanation}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
-);
-
-interface ActionButtonProps {
-    onClick: () => void;
-    icon: React.ReactNode;
-    color: 'blue' | 'red';
-    title: string;
-}
-
-const ActionButton: React.FC<ActionButtonProps> = ({ onClick, icon, color, title }) => {
-    const buttonColor = color === 'blue' ? 'bg-blue-500 hover:bg-blue-700' : 'bg-red-500 hover:bg-red-700';
-
-    return (
-        <button
-            onClick={onClick}
-            className={`${buttonColor} text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline`}
-            title={title}
-        >
-            {icon}
-        </button>
-    );
+  );
 };
 
-interface VitalSignProps {
-    icon: React.ReactNode;
-    label: string;
-    value: number;
-    unit: string;
-    patient: Patient;
+// Add the necessary CSS animations
+const cssStyles = `
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-const VitalSign: React.FC<VitalSignProps> = ({ icon, label, value, unit, patient }) => {
-    return (
-        <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-gray-200">
-            <div className="text-gray-700">{icon}</div>
-            <span className="text-lg font-semibold text-gray-800">{value} {unit}</span>
-            <span className="text-sm text-gray-500">{label}</span>
-        </div>
-    );
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+`;
+
+// Create a style element to inject the animations
+const StyleInjector = () => {
+  useEffect(() => {
+    const styleElement = document.createElement('style');
+    styleElement.innerHTML = cssStyles;
+    document.head.appendChild(styleElement);
+    
+    return () => {
+      document.head.removeChild(styleElement);
+    };
+  }, []);
+  
+  return null;
 };
 
-export default PatientDetail;
+const PatientDetailWithStyles: React.FC<PatientDetailProps> = (props) => {
+  return (
+    <>
+      <StyleInjector />
+      <PatientDetail {...props} />
+    </>
+  );
+};
+
+export default PatientDetailWithStyles;

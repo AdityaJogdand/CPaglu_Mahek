@@ -32,4 +32,5 @@ Thumbs.db
 *.csv
 
 # Ignore the env directory (if it contains sensitive data)
+venv/
 env/
