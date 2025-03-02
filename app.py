@@ -6,18 +6,22 @@ from firebase_admin import credentials, db
 from google import genai
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
+import json
+import asyncio
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
 # ========== CONFIGURE GEMINI CLIENT ==========
-client = genai.Client(api_key="AIzaSyCjYu4ylz27kUUrLam69jo1R7gTQHX_e1A")  # Replace with your actual API key
+client = genai.Client(api_key="AIzaSyCjYu4ylz27kUUrLam69jo1R7gTQHX_e1A")
 
 # ========== FIREBASE CONFIGURATION ==========
-cred = credentials.Certificate("firebase.json")  # Replace with your Firebase service account key
+cred = credentials.Certificate("firebase.json")
 firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://cpaglu-18a8f-default-rtdb.firebaseio.com/'  # Replace with your Firebase DB URL
+    'databaseURL': 'https://cpaglu-18a8f-default-rtdb.firebaseio.com/'
 })
 
 firebase_ref = db.reference("patients")
@@ -27,6 +31,43 @@ CSV_FILE = "patients.csv"
 
 # Store the hash of each row to detect changes
 previous_hashes = {}
+
+# Create a message queue for cross-thread communication
+message_queue = Queue()
+
+# ========== WEBSOCKET CONNECTION MANAGER ==========
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections = []
+        self.lock = threading.Lock()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        with self.lock:
+            self.active_connections.append(websocket)
+        print(f"New WebSocket client connected. Total connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        with self.lock:
+            self.active_connections.remove(websocket)
+        print(f"WebSocket client disconnected. Remaining connections: {len(self.active_connections)}")
+
+    async def broadcast(self, message):
+        disconnected = []
+        with self.lock:
+            connections = self.active_connections.copy()
+        
+        for connection in connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.append(connection)
+        
+        # Clean up any disconnected clients
+        for conn in disconnected:
+            self.disconnect(conn)
+
+manager = ConnectionManager()
 
 # ========== FASTAPI SETUP ==========
 app = FastAPI()
@@ -50,6 +91,36 @@ def get_patient_by_name(name: str):
         return patient
     return {"error": "Patient not found"}
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        # Send initial data to newly connected client
+        patients = firebase_ref.get() or {}
+        await websocket.send_json({"type": "initial_data", "data": patients})
+        
+        # Keep connection alive
+        while True:
+            await websocket.receive_text()  # Wait for any message, used to keep connection alive
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+# Background task that processes the message queue and broadcasts updates
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(process_broadcast_queue())
+
+async def process_broadcast_queue():
+    while True:
+        if not message_queue.empty():
+            message = message_queue.get()
+            await manager.broadcast(message)
+        await asyncio.sleep(0.1)  # Small delay to prevent CPU overuse
+
+# Function to safely queue a message from synchronous code
+def queue_broadcast(message):
+    message_queue.put(message)
+    
 # ========== FUNCTION TO HASH ROWS ==========
 def hash_row(row):
     row_str = ",".join(map(str, row))
@@ -62,7 +133,7 @@ def check_for_changes():
 
     # Get all names from Firebase
     firebase_patients = firebase_ref.get() or {}
-    firebase_names = set(firebase_patients.keys())
+    firebase_names = set(firebase_patients.keys() if firebase_patients else [])
     csv_names = set(df["Name"])
 
     # Remove names from Firebase that are not in the CSV
@@ -70,6 +141,10 @@ def check_for_changes():
     for name in names_to_remove:
         print(f"❌ Removing {name} from Firebase (not in CSV)")
         firebase_ref.child(name).delete()
+        queue_broadcast({
+            "type": "delete", 
+            "data": {"name": name}
+        })
 
     # Process changes for rows in CSV
     for index, row in df.iterrows():
@@ -135,7 +210,7 @@ def process_changed_row(row):
     print(f"🏥 Classification: {classification}")
     print(f"📋 Explanation: {explanation}\n")
 
-    firebase_ref.child(row['Name']).set({
+    patient_data = {
         "Name": row["Name"],
         "Temperature": temp,
         "BP_Systolic": bp_sys,
@@ -147,6 +222,14 @@ def process_changed_row(row):
         "Classification": classification,
         "Explanation": explanation,
         "Admission Date": row["Admission Date"]
+    }
+
+    firebase_ref.child(row['Name']).set(patient_data)
+    
+    # Queue the update for broadcasting
+    queue_broadcast({
+        "type": "update", 
+        "data": patient_data
     })
 
 # ========== WATCHDOG FILE MONITOR ==========
@@ -163,6 +246,7 @@ observer.schedule(event_handler, path=".", recursive=False)
 observer.start()
 
 print("🔍 Monitoring CSV file for real-time changes...")
+print("🔌 WebSocket server will run at ws://0.0.0.0:8000/ws")
 
 # Run FastAPI in a separate thread
 def start_api():

@@ -19,3 +19,4 @@ triage_log.txt
 
 # Ignore VS Code settings
 .vscode/
+venv/
