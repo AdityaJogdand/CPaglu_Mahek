@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patient X-ray Analysis</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      line-height: 1.5;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f7fa;
+      color: #333;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    
+    .patient-card {
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    
+    .patient-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #eaeaea;
+    }
+    
+    .patient-info {
+      display: flex;
+      align-items: center;
+    }
+    
+    .patient-avatar {
+      width: 48px;
+      height: 48px;
+      background-color: #e0e8f5;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      margin-right: 16px;
+    }
+    
+    .patient-classification {
+      padding: 6px 16px;
+      border-radius: 50px;
+      font-weight: 600;
+      background-color: #fef3c7;
+      color: #d97706;
+    }
+    
+    .urgent {
+      background-color: #fef3c7;
+      color: #d97706;
+    }
+    
+    .immediate {
+      background-color: #fee2e2;
+      color: #dc2626;
+    }
+    
+    .delayed {
+      background-color: #ecfdf5;
+      color: #10b981;
+    }
+    
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #eaeaea;
+      padding: 0 20px;
+    }
+    
+    .tab {
+      padding: 12px 16px;
+      margin-right: 16px;
+      font-weight: 500;
+      color: #6b7280;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .tab.active {
+      color: #3b82f6;
+      border-bottom-color: #3b82f6;
+    }
+    
+    .tab-content {
+      padding: 20px;
+    }
+    
+    .xray-upload {
+      background-color: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .button-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+    }
+    
+    .btn-primary {
+      background-color: #3b82f6;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background-color: #2563eb;
+    }
+    
+    .btn-success {
+      background-color: #10b981;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background-color: #059669;
+    }
+    
+    .btn-disabled {
+      background-color: #d1d5db;
+      color: #6b7280;
+      cursor: not-allowed;
+    }
+    
+    .xray-display {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    @media (max-width: 768px) {
+      .xray-display {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .xray-image-container {
+      background-color: #f3f4f6;
+      padding: 16px;
+      border-radius: 6px;
+    }
+    
+    .xray-image {
+      width: 100%;
+      height: auto;
+      background-color: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      border-radius: 4px;
+      aspect-ratio: 1/1;
+    }
+    
+    .xray-image img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    
+    .analysis-results {
+      background-color: #f3f4f6;
+      padding: 16px;
+      border-radius: 6px;
+    }
+    
+    .prediction {
+      background-color: white;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    .prediction-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    
+    .prediction-name {
+      font-weight: 500;
+    }
+    
+    .prediction-value {
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.875rem;
+    }
+    
+    .prediction-value.high {
+      background-color: #fee2e2;
+      color: #dc2626;
+    }
+    
+    .prediction-value.medium {
+      background-color: #fef3c7;
+      color: #d97706;
+    }
+    
+    .prediction-value.low {
+      background-color: #ecfdf5;
+      color: #10b981;
+    }
+    
+    .prediction-description {
+      font-size: 0.875rem;
+      color: #6b7280;
+    }
+    
+    .loading {
+      display: flex;
+      justify-content: center;
+      margin: 20px 0;
+    }
+    
+    .loading-dot {
+      width: 8px;
+      height: 8px;
+      margin: 0 4px;
+      border-radius: 50%;
+      background-color: #3b82f6;
+      animation: pulse 1.5s infinite ease-in-out;
+    }
+    
+    .loading-dot:nth-child(2) {
+      animation-delay: 0.3s;
+    }
+    
+    .loading-dot:nth-child(3) {
+      animation-delay: 0.6s;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; transform: scale(0.8); }
+      50% { opacity: 1; transform: scale(1.2); }
+    }
+    
+    .hidden {
+      display: none;
+    }
+    
+    #file-input {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="patient-card">
+      <div class="patient-header">
+        <div class="patient-info">
+          <div class="patient-avatar">JS</div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.5rem;">John Smith</h2>
+            <p style="margin: 0; color: #6b7280;">57 y/o Male • Admitted: Mar 1, 2025</p>
+          </div>
+        </div>
+        <div class="patient-classification urgent">Urgent</div>
+      </div>
+      
+      <div class="tabs">
+        <div class="tab">Overview</div>
+        <div class="tab">Vital Trends</div>
+        <div class="tab">Assessment</div>
+        <div class="tab active">X-Ray Analysis</div>
+      </div>
+      
+      <div class="tab-content">
+        <div class="xray-upload">
+          <h3 style="margin-top: 0;">X-Ray Analysis</h3>
+          
+          <div class="button-row">
+            <input type="file" id="file-input" accept="image/jpeg, image/png">
+            <button class="btn btn-primary" id="upload-btn">Upload X-Ray Image</button>
+            <button class="btn btn-disabled" id="analyze-btn" disabled>Analyze Image</button>
+          </div>
+          
+          <div id="error-message" class="hidden" style="background-color: #fee2e2; color: #b91c1c; padding: 8px 12px; border-radius: 4px; margin-bottom: 16px;"></div>
+          
+          <div id="loading" class="loading hidden">
+            <div class="loading-dot"></div>
+            <div class="loading-dot"></div>
+            <div class="loading-dot"></div>
+          </div>
+          
+          <div id="xray-display" class="xray-display hidden">
+            <!-- X-Ray Image -->
+            <div class="xray-image-container">
+              <h4 style="margin-top: 0; margin-bottom: 8px; font-size: 0.875rem;">X-Ray Image</h4>
+              <div class="xray-image">
+                <img id="xray-preview" src="" alt="X-Ray">
+              </div>
+            </div>
+            
+            <!-- Analysis Results -->
+            <div id="analysis-results" class="analysis-results hidden">
+              <h4 style="margin-top: 0; margin-bottom: 8px; font-size: 0.875rem;">Analysis Results</h4>
+              <div id="predictions-container">
+                <!-- Predictions will be added here -->
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div id="xray-assessment" class="hidden">
+          <h3>X-Ray Assessment</h3>
+          <div style="background-color: #f3f4f6; padding: 16px; border-radius: 6px;">
+            <div style="display: flex; align-items: flex-start; margin-bottom: 16px;">
+              <div id="assessment-icon" style="width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 12px;"></div>
+              <div>
+                <h4 id="primary-finding" style="margin: 0; font-weight: 600;"></h4>
+                <p id="confidence" style="margin: 0; font-size: 0.875rem; color: #6b7280;"></p>
+              </div>
+            </div>
+            <p id="finding-description" style="color: #374151; line-height: 1.6;"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // DOM elements
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const analyzeBtn = document.getElementById('analyze-btn');
+    const errorMessage = document.getElementById('error-message');
+    const loading = document.getElementById('loading');
+    const xrayDisplay = document.getElementById('xray-display');
+    const xrayPreview = document.getElementById('xray-preview');
+    const analysisResults = document.getElementById('analysis-results');
+    const predictionsContainer = document.getElementById('predictions-container');
+    const xrayAssessment = document.getElementById('xray-assessment');
+    const assessmentIcon = document.getElementById('assessment-icon');
+    const primaryFinding = document.getElementById('primary-finding');
+    const confidence = document.getElementById('confidence');
+    const findingDescription = document.getElementById('finding-description');
+    
+    // Event listeners
+    uploadBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+    
+    fileInput.addEventListener('change', handleFileSelect);
+    analyzeBtn.addEventListener('click', analyzeImage);
+    
+    // File selection handler
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      
+      // Reset states
+      hideElement(errorMessage);
+      hideElement(analysisResults);
+      hideElement(xrayAssessment);
+      
+      // Check if file is an image
+      if (!file.type.match('image.*')) {
+        showError("Please upload an image file (JPEG, PNG)");
+        return;
+      }
+      
+      // Show loading indicator
+      showElement(loading);
+      
+      // Simulate file loading (would be instant in real app, but showing UI flow)
+      setTimeout(() => {
+        // Read and display the selected image
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          xrayPreview.src = e.target.result;
+          showElement(xrayDisplay);
+          hideElement(loading);
+          
+          // Enable analyze button
+          analyzeBtn.classList.remove('btn-disabled');
+          analyzeBtn.classList.add('btn-success');
+          analyzeBtn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+      }, 500);
+    }
+    
+    // Image analysis handler
+    function analyzeImage() {
+      // Disable button and show loading
+      analyzeBtn.disabled = true;
+      analyzeBtn.classList.add('btn-disabled');
+      analyzeBtn.classList.remove('btn-success');
+      showElement(loading);
+      
+      // Simulate model processing with a delay
+      setTimeout(() => {
+        // Mock prediction results
+        const predictions = [
+          {
+            condition: "Pneumonia",
+            probability: 76,
+            description: "Possible lung inflammation showing as white opacities in lung fields, consistent with pneumonia."
+          },
+          {
+            condition: "COVID-19",
+            probability: 42,
+            description: "Some patterns potentially consistent with COVID-19 pneumonia, but less confident than primary finding."
+          },
+          {
+            condition: "Pleural Effusion",
+            probability: 23,
+            description: "Low probability of fluid accumulation in the pleural space."
+          }
+        ];
+        
+        // Display results
+        displayPredictions(predictions);
+        updateAssessment(predictions[0]);
+        
+        // Hide loading indicator
+        hideElement(loading);
+        
+        // Re-enable analyze button
+        analyzeBtn.disabled = false;
+        analyzeBtn.classList.remove('btn-disabled');
+        analyzeBtn.classList.add('btn-success');
+      }, 2000);
+    }
+    
+    // Display prediction results
+    function displayPredictions(predictions) {
+      // Clear previous results
+      predictionsContainer.innerHTML = '';
+      
+      // Create prediction elements
+      predictions.forEach(pred => {
+        const predElement = document.createElement('div');
+        predElement.className = 'prediction';
+        
+        const severityClass = pred.probability > 70 ? 'high' : 
+                              pred.probability > 40 ? 'medium' : 'low';
+        
+        predElement.innerHTML = `
+          <div class="prediction-header">
+            <span class="prediction-name">${pred.condition}</span>
+            <span class="prediction-value ${severityClass}">${pred.probability}%</span>
+          </div>
+          <p class="prediction-description">${pred.description}</p>
+        `;
+        
+        predictionsContainer.appendChild(predElement);
+      });
+      
+      // Show results container
+      showElement(analysisResults);
+    }
+    
+    // Update assessment section
+    function updateAssessment(primaryPrediction) {
+      // Set content
+      primaryFinding.textContent = `Primary finding: ${primaryPrediction.condition}`;
+      confidence.textContent = `Confidence: ${primaryPrediction.probability}%`;
+      findingDescription.textContent = primaryPrediction.description;
+      
+      // Style based on severity
+      if (primaryPrediction.probability > 70) {
+        assessmentIcon.style.backgroundColor = '#fee2e2';
+        assessmentIcon.style.color = '#dc2626';
+        assessmentIcon.textContent = '!';
+      } else if (primaryPrediction.probability > 40) {
+        assessmentIcon.style.backgroundColor = '#fef3c7';
+        assessmentIcon.style.color = '#d97706';
+        assessmentIcon.textContent = '⚠️';
+      } else {
+        assessmentIcon.style.backgroundColor = '#ecfdf5';
+        assessmentIcon.style.color = '#10b981';
+        assessmentIcon.textContent = '✓';
+      }
+      
+      // Show assessment
+      showElement(xrayAssessment);
+    }
+    
+    // Helper functions
+    function showElement(element) {
+      element.classList.remove('hidden');
+    }
+    
+    function hideElement(element) {
+      element.classList.add('hidden');
+    }
+    
+    function showError(message) {
+      errorMessage.textContent = message;
+      showElement(errorMessage);
+    }
+  </script>
+</body>
+</html>
